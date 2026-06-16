@@ -441,7 +441,7 @@ class lighter extends Exchange {
     public function pre_load_lighter_library($params = array ()) {
         /**
          * if the required credentials are available in options, it will pre-load the lighter Signer to avoid delaying sensitive calls like createOrder the first time they're executed
-         * @param $params
+         * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @return {boolean} true if the $signer was loaded, false otherwise
          */
         $apiKeyIndex = null;
@@ -650,7 +650,7 @@ class lighter extends Exchange {
         $strAccountIndex = $this->number_to_string($accountIndex);
         $strApiKeyIndex = $this->number_to_string($apiKeyIndex);
         $signer = $this->load_account($this->options['chainId'], $this->get_lighter_private_key($strAccountIndex, $strApiKeyIndex), $strApiKeyIndex, $strAccountIndex, $params);
-        $nonce = $this->fetch_nonce($accountIndex, $apiKeyIndex, $params);
+        $nonce = $this->fetch_nonce($accountIndex, $apiKeyIndex, $this->extend($params, array( 'skipNonce' => false )));
         $expiry = $this->milliseconds() + 365 * 864000;
         $signRaw = array(
             'integrator_account_index' => $builder,
@@ -680,7 +680,7 @@ class lighter extends Exchange {
         $strApiKeyIndex = $this->number_to_string($apiKeyIndex);
         $signerNotLoad = $this->options['auths'][$strAccountIndex][$strApiKeyIndex]['signer'];
         list($privateKey, $publicKey) = $this->lighter_generate_api_key($signerNotLoad);
-        $nonce = $this->fetch_nonce($accountIndex, $apiKeyIndex, $params);
+        $nonce = $this->fetch_nonce($accountIndex, $apiKeyIndex, $this->extend($params, array( 'skipNonce' => false )));
         $signRaw = array(
             'pubkey' => $this->encode($publicKey),
             'nonce' => $nonce,
@@ -876,6 +876,12 @@ class lighter extends Exchange {
         if ($nonceInOptions !== null) {
             return $nonceInOptions;
         }
+        // avoid $skipNonce for l1 operations
+        $skipNonce = true;
+        list($skipNonce, $params) = $this->handle_option_and_params($params, 'fetchNonce', 'skipNonce', true);
+        if ($skipNonce) {
+            return $this->milliseconds();
+        }
         $response = $this->publicGetNextNonce (array( 'account_index' => $accountIndex, 'api_key_index' => $apiKeyIndex ));
         return $this->safe_integer($response, 'nonce');
     }
@@ -1024,7 +1030,7 @@ class lighter extends Exchange {
          * @see https://apidocs.lighter.xyz/reference/status
          *
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=exchange-$status-structure $status structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=exchange-$status-structure $status structure~
          */
         $response = $this->rootGet ($params);
         //
@@ -1268,44 +1274,43 @@ class lighter extends Exchange {
         //     }
         //
         $data = $this->safe_list($response, 'asset_details', array());
-        $result = array();
-        for ($i = 0; $i < count($data); $i++) {
-            $entry = $data[$i];
-            $id = $this->safe_string($entry, 'asset_id');
-            $code = $this->safe_currency_code($this->safe_string($entry, 'symbol'));
-            $decimals = $this->safe_string($entry, 'decimals');
-            $isUSDC = ($code === 'USDC');
-            $depositMin = null;
-            $withdrawMin = null;
-            if ($isUSDC) {
-                $depositMin = $this->safe_number($entry, 'min_transfer_amount');
-                $withdrawMin = $this->safe_number($entry, 'min_withdrawal_amount');
-            }
-            $result[$code] = $this->safe_currency_structure(array(
-                'id' => $id,
-                'name' => $code,
-                'code' => $code,
-                'precision' => $this->parse_number('1e-' . $decimals),
-                'active' => true,
-                'fee' => null,
-                'networks' => array(),
-                'deposit' => $isUSDC,
-                'withdraw' => $isUSDC,
-                'type' => 'crypto',
-                'limits' => array(
-                    'deposit' => array(
-                        'min' => $depositMin,
-                        'max' => null,
-                    ),
-                    'withdraw' => array(
-                        'min' => $withdrawMin,
-                        'max' => null,
-                    ),
-                ),
-                'info' => $entry,
-            ));
+        return $this->parse_currencies($data);
+    }
+
+    public function parse_currency(array $rawCurrency): array {
+        $id = $this->safe_string($rawCurrency, 'asset_id');
+        $code = $this->safe_currency_code($this->safe_string($rawCurrency, 'symbol'));
+        $decimals = $this->safe_string($rawCurrency, 'decimals');
+        $isUSDC = ($code === 'USDC');
+        $depositMin = null;
+        $withdrawMin = null;
+        if ($isUSDC) {
+            $depositMin = $this->safe_number($rawCurrency, 'min_transfer_amount');
+            $withdrawMin = $this->safe_number($rawCurrency, 'min_withdrawal_amount');
         }
-        return $result;
+        return $this->safe_currency_structure(array(
+            'id' => $id,
+            'name' => $code,
+            'code' => $code,
+            'precision' => $this->parse_number('1e-' . $decimals),
+            'active' => true,
+            'fee' => null,
+            'networks' => array(),
+            'deposit' => $isUSDC,
+            'withdraw' => $isUSDC,
+            'type' => 'crypto',
+            'limits' => array(
+                'deposit' => array(
+                    'min' => $depositMin,
+                    'max' => null,
+                ),
+                'withdraw' => array(
+                    'min' => $withdrawMin,
+                    'max' => null,
+                ),
+            ),
+            'info' => $rawCurrency,
+        ));
     }
 
     public function fetch_order_book(string $symbol, ?int $limit = null, $params = array ()): array {
@@ -1317,7 +1322,7 @@ class lighter extends Exchange {
          * @param {string} $symbol unified $symbol of the $market to fetch the order book for
          * @param {int} [$limit] the maximum amount of order book entries to return
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} A dictionary of ~@link https://docs.ccxt.com/#/?id=order-book-structure order book structures~ indexed by $market symbols
+         * @return {array} A dictionary of ~@link https://docs.ccxt.com/?id=order-book-structure order book structures~ indexed by $market symbols
          */
         if ($symbol === null) {
             throw new ArgumentsRequired($this->id . ' fetchOrderBook() requires a $symbol argument');
@@ -1344,7 +1349,7 @@ class lighter extends Exchange {
         //                 "initial_base_amount" => "0.2000",
         //                 "remaining_base_amount" => "0.2000",
         //                 "price" => "3430.00",
-        //                 "order_expiry" => 1765419046807
+        //                 "order_expiry" => 1765419046808
         //             }
         //         ),
         //         "total_bids" => 1,
@@ -1471,7 +1476,7 @@ class lighter extends Exchange {
          *
          * @param {string} $symbol unified $symbol of the $market to fetch the ticker for
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=ticker-structure ticker structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=ticker-structure ticker structure~
          */
         if ($symbol === null) {
             throw new ArgumentsRequired($this->id . ' fetchTicker() requires a $symbol argument');
@@ -1541,7 +1546,7 @@ class lighter extends Exchange {
          *
          * @param {string[]|null} $symbols unified $symbols of the markets to fetch the ticker for, all market $tickers are returned if not assigned
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a dictionary of ~@link https://docs.ccxt.com/#/?id=ticker-structure ticker structures~
+         * @return {array} a dictionary of ~@link https://docs.ccxt.com/?id=ticker-structure ticker structures~
          */
         $this->load_markets();
         $symbols = $this->market_symbols($symbols);
@@ -1696,7 +1701,7 @@ class lighter extends Exchange {
          *
          * @param {string[]} [$symbols] list of unified market $symbols
          * @param {array} [$params] extra parameters specific to the $exchange API endpoint
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=funding-rate-structure funding rate structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=funding-rate-structure funding rate structures~
          */
         $this->load_markets();
         $response = $this->publicGetFundingRates ($this->extend($params));
@@ -1807,10 +1812,12 @@ class lighter extends Exchange {
                 }
             } else {
                 $perpBalance = $this->safe_dict($result, 'USDC', $this->account());
-                $perpUSDCTotal = $this->safe_string($account, 'collateral');
-                $perpUSDCFree = $this->safe_string($account, 'available_balance');
-                $perpBalance['total'] = Precise::string_add($perpBalance['total'], $perpUSDCTotal);
-                $perpBalance['free'] = Precise::string_add($perpBalance['free'], $perpUSDCFree);
+                $perpTotal = $this->safe_string($perpBalance, 'total', '0');
+                $perpFree = $this->safe_string($perpBalance, 'free', '0');
+                $perpUSDCTotal = $this->safe_string($account, 'collateral', '0');
+                $perpUSDCFree = $this->safe_string($account, 'available_balance', '0');
+                $perpBalance['total'] = Precise::string_add($perpTotal, $perpUSDCTotal);
+                $perpBalance['free'] = Precise::string_add($perpFree, $perpUSDCFree);
                 $result['USDC'] = $perpBalance;
             }
         }

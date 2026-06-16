@@ -483,12 +483,17 @@ class grvt extends Exchange {
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @return response from exchange
          */
-        if ($this->uses_private_key()) {
-            $this->sign_in_with_private_key($params);
-            $this->initialize_client($params);
-        } else {
-            $this->sign_in_with_api_key($params);
+        // if ($this->uses_private_key()) {
+        //     $this->sign_in_with_private_key($params);
+        //     $this->initialize_client($params);
+        // } else {
+        //     $this->sign_in_with_api_key($params);
+        // }
+        if ($this->privateKey === null || $this->privateKey === '') {
+            throw new PermissionDenied('Private key is required for this operation. If you used joined GRVT through email registration instead of Web3 wallet, then read => https://github.com/ccxt/ccxt/wiki/FAQ#how-to-use-the-grvt-exchange-in-ccxt');
         }
+        $this->sign_in_with_private_key($params);
+        $this->initialize_client($params);
         $this->load_account_infos();
         return true;
     }
@@ -823,7 +828,7 @@ class grvt extends Exchange {
          *
          * @param {string} $symbol unified $symbol of the $market to fetch the ticker for
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=ticker-structure ticker structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=ticker-structure ticker structure~
          */
         $this->load_markets();
         $market = $this->market($symbol);
@@ -978,7 +983,7 @@ class grvt extends Exchange {
          * @param {int} [$limit] the maximum amount of items to fetch
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms for the ending date filter, default is the current time
-         * @return {Trade[]} a list of ~@link https://docs.ccxt.com/#/?id=public-trades trade structures~
+         * @return {Trade[]} a list of ~@link https://docs.ccxt.com/?id=public-trades trade structures~
          */
         $this->load_markets();
         $market = $this->market($symbol);
@@ -1199,11 +1204,11 @@ class grvt extends Exchange {
          *
          * @param {string} $symbol unified $symbol of the $market to fetch the funding rate history for
          * @param {int} [$since] timestamp in ms of the earliest funding rate to fetch
-         * @param {int} [$limit] the maximum amount of ~@link https://docs.ccxt.com/#/?id=funding-rate-history-structure funding rate structures~ to fetch
+         * @param {int} [$limit] the maximum amount of ~@link https://docs.ccxt.com/?id=funding-rate-history-structure funding rate structures~ to fetch
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
          * @param {boolean} [$params->paginate] default false, when true will automatically $paginate by calling this endpoint multiple times. See in the docs all the [availble parameters](https://github.com/ccxt/ccxt/wiki/Manual#pagination-$params)
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=funding-rate-history-structure funding rate structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=funding-rate-history-structure funding rate structures~
          */
         if ($symbol === null) {
             throw new ArgumentsRequired($this->id . ' fetchFundingRateHistory() requires a $symbol argument');
@@ -1284,7 +1289,7 @@ class grvt extends Exchange {
          * @see https://api-docs.grvt.io/trading_api/#sub-account-summary
          *
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=balance-structure balance structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=balance-structure balance structure~
          */
         $this->load_markets_and_sign_in();
         $request = array(
@@ -1381,7 +1386,7 @@ class grvt extends Exchange {
          * @param {int} [$limit] the maximum number of deposits structures to retrieve
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=transaction-structure transaction structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=transaction-structure transaction structures~
          */
         $this->load_markets_and_sign_in();
         $request = array();
@@ -1436,7 +1441,7 @@ class grvt extends Exchange {
          * @param {int} [$limit] the maximum number of transfer structures to retrieve (default 50, max 200)
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=transaction-structure transaction structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=transaction-structure transaction structures~
          */
         $this->load_markets_and_sign_in();
         $request = array();
@@ -1601,13 +1606,15 @@ class grvt extends Exchange {
         $networkCode = null;
         $addressFrom = $this->safe_string($transaction, 'from_account_id');
         $addressTo = $this->safe_string($transaction, 'to_account_id');
+        $currencyId = $this->safe_string($transaction, 'currency');
+        $code = $this->safe_currency_code($currencyId, $currency);
         if (is_array($transaction) && array_key_exists('transfer_metadata', $transaction)) {
             $metaData = $this->omit_zero($this->safe_string($transaction, 'transfer_metadata'));
             if ($metaData !== null) {
                 $parsedMeta = $this->parse_json($metaData);
                 $direction = $this->safe_string_lower($parsedMeta, 'direction');
                 $txId = $this->safe_string($parsedMeta, 'provider_tx_id');
-                $networkCode = $this->network_id_to_code($this->safe_string($parsedMeta, 'chainid'));
+                $networkCode = $this->network_id_to_code($this->safe_string($parsedMeta, 'chainid'), $code);
                 if ($direction === 'withdrawal') {
                     $addressTo = $this->safe_string($parsedMeta, 'endpoint');
                 } elseif ($direction === 'deposit') {
@@ -1616,8 +1623,6 @@ class grvt extends Exchange {
             }
         }
         $timestamp = $this->safe_integer_product_2($transaction, 'event_time', 'initiated_time', 0.000001);
-        $currencyId = $this->safe_string($transaction, 'currency');
-        $code = $this->safe_currency_code($currencyId, $currency);
         return array(
             'info' => $transaction,
             'id' => null,
@@ -1652,7 +1657,7 @@ class grvt extends Exchange {
          * @param {int} [$limit] the maximum number of $transfers structures to retrieve (default 10, max 100)
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {boolean} [$params->paginate] whether to $paginate the results (default false)
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=transfer-structure transfer structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=transfer-structure transfer structures~
          */
         if ($code === null) {
             throw new ArgumentsRequired($this->id . ' fetchTransfers() requires a $code argument');
@@ -1739,7 +1744,7 @@ class grvt extends Exchange {
          * @param {string} $fromAccount account to transfer from
          * @param {string} $toAccount account to transfer to
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=transfer-structure transfer structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=transfer-structure transfer structure~
          */
         $this->load_markets_and_sign_in();
         $currency = $this->currency($code);
@@ -1841,7 +1846,7 @@ class grvt extends Exchange {
 
     public function load_account_infos() {
         if ($this->safe_string($this->options, 'userMainAccountId') !== null) {
-            return;
+            return false;
         }
         $promises = array();
         $promises[] = $this->privateTradingPostFullV1AggregatedAccountSummary ();
@@ -1894,6 +1899,7 @@ class grvt extends Exchange {
             $subAccountId = $this->safe_string($subAccountIds, 0);
             $this->options['accountId'] = $subAccountId;
         }
+        return true;
     }
 
     public function withdraw(string $code, float $amount, string $address, ?string $tag = null, $params = array ()): array {
@@ -1908,7 +1914,7 @@ class grvt extends Exchange {
          * @param {string} $tag
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {string} $params->network the network to withdraw on (mandatory)
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=transaction-structure transaction structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=transaction-structure transaction structure~
          */
         $this->check_address($address);
         $this->load_markets_and_sign_in();
@@ -1922,7 +1928,7 @@ class grvt extends Exchange {
             'signature' => $this->default_signature(),
         );
         list($networkCode, $query) = $this->handle_network_code_and_params($params);
-        $networkId = $this->network_code_to_id($networkCode);
+        $networkId = $this->network_code_to_id($networkCode, $code);
         if ($networkId === null) {
             throw new BadRequest($this->id . ' withdraw() requires a network parameter');
         }
@@ -1959,7 +1965,7 @@ class grvt extends Exchange {
          * @param {bool} [$params->postOnly] true or false
          * @param {bool} [$params->reduceOnly] Ensures that the executed order does not flip the opened position.
          * @param {string} [$params->clientOrderId] a unique id for the order
-         * @return {array} an ~@link https://docs.ccxt.com/#/?id=order-structure order structure~
+         * @return {array} an ~@link https://docs.ccxt.com/?id=order-structure order structure~
          */
         $this->load_markets_and_sign_in();
         $market = $this->market($symbol);
@@ -1979,38 +1985,44 @@ class grvt extends Exchange {
         } else {
             throw new InvalidOrder($this->id . ' createOrder() => order $side must be either "buy" or "sell"');
         }
+        $clientOrderId = $this->safe_string($params, 'clientOrderId');
+        if ($clientOrderId === null) {
+            $clientOrderId = (string) $this->nonce() . '000' . (string) $this->request_id();
+        }
+        $params = $this->omit($params, array( 'clientOrderId' ));
         $isMarketOrder = ($type === 'market');
+        $subAccountId = $this->get_sub_account_id($params);
+        $isReduceOnly = $this->safe_bool($params, 'reduceOnly', false);
         $orderRequest = array(
-            'sub_account_id' => $this->get_sub_account_id($params),
+            'sub_account_id' => $subAccountId,
             'time_in_force' => null,
             'legs' => array( $orderLeg ),
             'signature' => $this->default_signature(),
             'metadata' => array(
-                'client_order_id' => (string) $this->nonce() . '000' . (string) $this->request_id(),
+                'client_order_id' => $clientOrderId,
             ),
             'is_market' => $isMarketOrder,
             'post_only' => false,
-            'reduce_only' => $this->safe_bool($params, 'reduceOnly', false),
+            'reduce_only' => $isReduceOnly,
             // 'order_id' => null,
             // 'state' => null,
         );
-        $timeInForce = $this->safe_string_upper($params, 'timeInForce');
+        $timeInForce = $this->safe_string_upper($params, 'timeInForce', 'GOOD_TILL_TIME');
         $postOnly = $this->is_post_only($isMarketOrder, null, $params);
         if ($postOnly) {
             $orderRequest['post_only'] = true;
-        } else {
-            if ($timeInForce === null) {
-                $timeInForce = 'GOOD_TILL_TIME';
-            } else {
-                $tifMap = array(
-                    'GTC' => 'GOOD_TILL_TIME',
-                    'FOK' => 'FILL_OR_KILL', // tbd => why not 'ALL_OR_NONE'
-                    'IOC' => 'IMMEDIATE_OR_CANCEL',
-                );
-                $timeInForce = $this->safe_string($tifMap, $timeInForce, $timeInForce);
-            }
-            $orderRequest['time_in_force'] = $timeInForce;
         }
+        if ($timeInForce === null) {
+            $timeInForce = 'GOOD_TILL_TIME';
+        } else {
+            $tifMap = array(
+                'GTC' => 'GOOD_TILL_TIME',
+                'FOK' => 'FILL_OR_KILL', // tbd => why not 'ALL_OR_NONE'
+                'IOC' => 'IMMEDIATE_OR_CANCEL',
+            );
+            $timeInForce = $this->safe_string($tifMap, $timeInForce, $timeInForce);
+        }
+        $orderRequest['time_in_force'] = $timeInForce;
         if (!$isMarketOrder) {
             if ($postOnly) {
                 $timeInForce = 'POST_ONLY';
@@ -2213,7 +2225,7 @@ class grvt extends Exchange {
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
          * @param {boolean} [$params->paginate] default false, when true will automatically $paginate by calling this endpoint multiple times. See in the docs all the [available parameters](https://github.com/ccxt/ccxt/wiki/Manual#pagination-$params)
-         * @return {Trade[]} a list of ~@link https://docs.ccxt.com/#/?id=trade-structure trade structures~
+         * @return {Trade[]} a list of ~@link https://docs.ccxt.com/?id=trade-structure trade structures~
          */
         $this->load_markets_and_sign_in();
         $paginate = false;
@@ -2283,7 +2295,7 @@ class grvt extends Exchange {
          *
          * @param {string[]|null} $symbols list of unified $market $symbols
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=position-structure position structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=position-structure position structures~
          */
         $this->load_markets_and_sign_in();
         $request = array(
@@ -2543,7 +2555,7 @@ class grvt extends Exchange {
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
          * @param {boolean} [$params->paginate] default false, when true will automatically $paginate by calling this endpoint multiple times. See in the docs all the [available parameters](https://github.com/ccxt/ccxt/wiki/Manual#pagination-$params)
-         * @return {array} a ~@link https://docs.ccxt.com/#/?id=funding-history-structure funding history structure~
+         * @return {array} a ~@link https://docs.ccxt.com/?id=funding-history-structure funding history structure~
          */
         $this->load_markets_and_sign_in();
         $paginate = false;
@@ -2626,11 +2638,12 @@ class grvt extends Exchange {
          * @param {int} [$limit] the maximum number of order structures to retrieve
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {int} [$params->until] timestamp in ms of the latest item
-         * @return {Order[]} a list of ~@link https://docs.ccxt.com/#/?id=order-structure order structures~
+         * @return {Order[]} a list of ~@link https://docs.ccxt.com/?id=order-structure order structures~
          */
         $this->load_markets_and_sign_in();
+        $subAccountId = $this->get_sub_account_id($params);
         $request = array(
-            'sub_account_id' => $this->get_sub_account_id($params),
+            'sub_account_id' => $subAccountId,
         );
         $market = null;
         if ($symbol !== null) {
@@ -2724,7 +2737,7 @@ class grvt extends Exchange {
          * @param {int} [$since] the earliest time in ms to fetch orders for
          * @param {int} [$limit] the maximum number of order structures to retrieve
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {Order[]} a list of ~@link https://docs.ccxt.com/#/?id=order-structure order structures~
+         * @return {Order[]} a list of ~@link https://docs.ccxt.com/?id=order-structure order structures~
          */
         $this->load_markets_and_sign_in();
         $request = array(
@@ -2805,11 +2818,12 @@ class grvt extends Exchange {
          * @param {string} $symbol unified $symbol of the market the order was made in
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {string} [$params->clientOrderId] client order $id
-         * @return {array} An ~@link https://docs.ccxt.com/#/?$id=order-structure order structure~
+         * @return {array} An ~@link https://docs.ccxt.com/?$id=order-structure order structure~
          */
         $this->load_markets_and_sign_in();
+        $subAccountId = $this->get_sub_account_id($params);
         $request = array(
-            'sub_account_id' => $this->get_sub_account_id($params),
+            'sub_account_id' => $subAccountId,
         );
         $clientOrderId = $this->safe_string_2($params, 'clientOrderId', 'client_order_id');
         if ($clientOrderId !== null) {
@@ -3054,7 +3068,7 @@ class grvt extends Exchange {
          *
          * @param {string} $symbol cancel alls open orders
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
-         * @return {array[]} a list of ~@link https://docs.ccxt.com/#/?id=order-structure order structures~
+         * @return {array[]} a list of ~@link https://docs.ccxt.com/?id=order-structure order structures~
          */
         $this->load_markets_and_sign_in();
         $request = array(
@@ -3076,7 +3090,7 @@ class grvt extends Exchange {
         //    }
         //
         $result = $this->safe_dict($response, 'result', array());
-        return $this->parse_orders(array( $result ), null);
+        return $this->parse_orders(array( $result ));
     }
 
     public function cancel_order(string $id, ?string $symbol = null, $params = array ()) {
@@ -3089,11 +3103,12 @@ class grvt extends Exchange {
          * @param {string} [$symbol] unified $symbol of the market the order was made in
          * @param {array} [$params] extra parameters specific to the exchange API endpoint
          * @param {string} [$params->clientOrderId] client order $id
-         * @return {array} An ~@link https://docs.ccxt.com/#/?$id=order-structure order structure~
+         * @return {array} An ~@link https://docs.ccxt.com/?$id=order-structure order structure~
          */
         $this->load_markets_and_sign_in();
+        $subAccoubntId = $this->get_sub_account_id($params);
         $request = array(
-            'sub_account_id' => $this->get_sub_account_id($params),
+            'sub_account_id' => $subAccoubntId,
         );
         $clientOrderId = $this->safe_string_2($params, 'clientOrderId', 'client_order_id');
         if ($clientOrderId !== null) {
